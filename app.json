@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "Spotifree",
+    "slug": "spotifree",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#08130e"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.spotifree.app"
+    }
+  }
+}
