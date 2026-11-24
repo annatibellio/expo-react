@@ -4,19 +4,16 @@ import {initializeApp, getApps, getApp} from 'firebase/app';
 import * as FA from 'firebase/auth';
 import {initializeFirestore, getFirestore, doc, getDoc, setDoc} from 'firebase/firestore';
 
-// 1) console.firebase.google.com -> criar projeto -> adicionar app Web (</>) -> copie a config aqui
-// 2) Authentication -> Sign-in method: ative "E-mail/senha" e "Anônimo"
-// 3) Firestore Database -> criar banco (modo produção) e cole as regras do README abaixo
 const firebaseConfig = {
-  apiKey: 'COLE_AQUI',
-  authDomain: 'COLE_AQUI.firebaseapp.com',
-  projectId: 'COLE_AQUI',
-  storageBucket: 'COLE_AQUI.appspot.com',
-  messagingSenderId: 'COLE_AQUI',
-  appId: 'COLE_AQUI',
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY || '',
+  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN || '',
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || '',
+  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET || '',
+  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || '',
+  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID || '',
 };
 
-export const fbReady = !firebaseConfig.apiKey.startsWith('COLE');
+export const fbReady = Object.values(firebaseConfig).every(Boolean);
 
 let auth = null, db = null;
 if (fbReady) {
@@ -34,22 +31,49 @@ if (fbReady) {
   }
 }
 
+const requireFirebase = () => {
+  if (!auth || !db) throw {code: 'auth/firebase-not-configured'};
+};
+
 export const onUser = cb => auth ? FA.onAuthStateChanged(auth, cb) : (cb(null), () => {});
-export const guestLogin = () => FA.signInAnonymously(auth);
-export const login = (email, pass) => FA.signInWithEmailAndPassword(auth, email, pass);
+export const guestLogin = () => {
+  requireFirebase();
+  return FA.signInAnonymously(auth);
+};
+export const login = (email, pass) => {
+  requireFirebase();
+  return FA.signInWithEmailAndPassword(auth, email, pass);
+};
 export const register = async (name, email, pass) => {
+  requireFirebase();
   const c = await FA.createUserWithEmailAndPassword(auth, email, pass);
-  if (name) await FA.updateProfile(c.user, {displayName: name});
+  await FA.updateProfile(c.user, {displayName: name});
+  await setDoc(doc(db, 'users', c.user.uid), {
+    name,
+    email: c.user.email,
+    saved: [],
+    playlists: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
   return c;
 };
-export const logout = () => FA.signOut(auth);
+export const logout = () => {
+  requireFirebase();
+  return FA.signOut(auth);
+};
 export const loadData = async uid => {
+  requireFirebase();
   const s = await getDoc(doc(db, 'users', uid));
   return s.exists() ? s.data() : null;
 };
-export const saveData = (uid, data) => setDoc(doc(db, 'users', uid), {...data, updatedAt: Date.now()}, {merge: true});
+export const saveData = (uid, data) => {
+  requireFirebase();
+  return setDoc(doc(db, 'users', uid), {...data, updatedAt: Date.now()}, {merge: true});
+};
 
 export const authMessage = e => ({
+  'auth/firebase-not-configured': 'Configure as credenciais do Firebase no arquivo .env para criar uma conta.',
   'auth/invalid-credential': 'E-mail ou senha incorretos.',
   'auth/user-not-found': 'Usuário não encontrado.',
   'auth/wrong-password': 'Senha incorreta.',

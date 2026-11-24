@@ -57,6 +57,8 @@ export default function App() {
   const [dialog,setDialog]=useState(null);
   const [authOpen,setAuthOpen]=useState(false), [mode,setMode]=useState('login'), [fName,setFName]=useState(''), [fEmail,setFEmail]=useState(''), [fPass,setFPass]=useState('');
   const [authErr,setAuthErr]=useState(''), [busy,setBusy]=useState(false), [seekW,setSeekW]=useState(1);
+  const [sleepMinutes,setSleepMinutes]=useState(0);
+  const sleepRef=useRef(null);
 
   const soundRef=useRef(null), reqId=useRef(0), hydrated=useRef(null);
   const queueRef=useRef([]), indexRef=useRef(-1), shuffleRef=useRef(false), repeatRef=useRef('off');
@@ -70,7 +72,9 @@ export default function App() {
     const info={uid:u.uid,anon:u.isAnonymous,name:u.displayName||'',email:u.email||''};
     setUser(info);
     let data=null;
-    try{data=await fb.loadData(u.uid);}catch(e){}
+    try{data=await fb.loadData(u.uid);}catch(e){
+      setDialog({title:'Falha ao carregar dados',msg:'Sua conta entrou, mas os dados do Firestore não puderam ser carregados. Verifique a conexão e as regras do banco.',actions:[{text:'Ok'}]});
+    }
     if(!data){try{const l=await AsyncStorage.getItem(keyFor(u.uid));if(l)data=JSON.parse(l);}catch(e){}}
     applyData(data);hydrated.current=u.uid;
     setPage(p=>p==='welcome'?'home':p);
@@ -86,7 +90,9 @@ export default function App() {
     const data={saved,playlists,name:user?.name||''};
     AsyncStorage.setItem(keyFor(fb.fbReady?uid:null),JSON.stringify(data)).catch(()=>{});
     if(!fb.fbReady)return;
-    const t=setTimeout(()=>fb.saveData(uid,data).catch(()=>{}),800);
+    const t=setTimeout(()=>fb.saveData(uid,data).catch(()=>{
+      setDialog({title:'Falha ao sincronizar',msg:'Não foi possível salvar suas alterações no Firebase. Verifique a conexão e as regras do Firestore.',actions:[{text:'Ok'}]});
+    }),800);
     return ()=>clearTimeout(t);
   },[saved,playlists,user]);
 
@@ -108,20 +114,46 @@ export default function App() {
 
   // ---------- player ----------
   const unload=async()=>{const s=soundRef.current;soundRef.current=null;if(s){try{await s.unloadAsync();}catch(e){}}};
-  useEffect(()=>{Audio.setAudioModeAsync({playsInSilentModeIOS:true,staysActiveInBackground:true}).catch(()=>{});return ()=>{unload();};},[]);
+  useEffect(()=>{
+    Audio.setAudioModeAsync({playsInSilentModeIOS:true,staysActiveInBackground:true}).catch(()=>{});
+    return ()=>{unload();};
+  },[]);
+  useEffect(()=>{
+    if(sleepRef.current){clearTimeout(sleepRef.current);sleepRef.current=null;}
+    if(!sleepMinutes)return;
+    sleepRef.current=setTimeout(async()=>{
+      try{await soundRef.current?.pauseAsync();}catch(e){}
+      setPlaying(false);
+      setSleepMinutes(0);
+      setDialog({title:'Timer concluído',msg:'A reprodução foi pausada.',actions:[{text:'Ok'}]});
+    },sleepMinutes*60*1000);
+    return ()=>{if(sleepRef.current){clearTimeout(sleepRef.current);sleepRef.current=null;}};
+  },[sleepMinutes]);
   const playAt=async(list,i)=>{
     const track=list?.[i]; if(!track?.preview)return;
     const id=++reqId.current;
     await unload();
-    setQueue(list);setIndex(i);setCurrent(track);setPosition(0);setPlaying(true);
+    setQueue(list);setIndex(i);setCurrent(track);setPosition(0);setDuration(30000);setPlaying(true);
     try {
-      const {sound}=await Audio.Sound.createAsync({uri:track.preview},{shouldPlay:true,progressUpdateIntervalMillis:500},
-        st=>{if(id!==reqId.current||!st.isLoaded)return;
-          setPosition(st.positionMillis||0);setDuration(st.durationMillis||30000);setPlaying(st.isPlaying);
-          if(st.didJustFinish)onEnd();});
+      const {sound}=await Audio.Sound.createAsync(
+        {uri:track.preview},
+        {shouldPlay:true,progressUpdateIntervalMillis:500},
+        status=>{
+          if(id!==reqId.current||!status.isLoaded)return;
+          setPosition(status.positionMillis||0);
+          setDuration(status.durationMillis||30000);
+          setPlaying(status.isPlaying);
+          if(status.didJustFinish)onEnd();
+        },
+      );
       if(id!==reqId.current){sound.unloadAsync().catch(()=>{});return;}
       soundRef.current=sound;
-    } catch(e){if(id===reqId.current){setPlaying(false);setDialog({title:'Não foi possível reproduzir',msg:'Tente outra música.',actions:[{text:'Ok'}]});}}
+    } catch(e) {
+      if(id===reqId.current){
+        setPlaying(false);
+        setDialog({title:'Não foi possível reproduzir',msg:'Tente outra música.',actions:[{text:'Ok'}]});
+      }
+    }
   };
   const onEnd=()=>{
     const q=queueRef.current,i=indexRef.current; if(!q.length)return;
@@ -130,12 +162,12 @@ export default function App() {
     if(i+1>=q.length&&repeatRef.current==='off'){setPlaying(false);return;}
     playAt(q,(i+1)%q.length);
   };
-  const toggle=async()=>{const s=soundRef.current;if(!s)return;try{if(playing)await s.pauseAsync();else await s.playAsync();}catch(e){}};
+  const toggle=async()=>{const sound=soundRef.current;if(!sound)return;try{if(playing)await sound.pauseAsync();else await sound.playAsync();}catch(e){}};
   const step=dir=>{const q=queueRef.current;if(!q.length)return;
     const n=shuffleRef.current&&dir>0&&q.length>1?Math.floor(Math.random()*q.length):(indexRef.current+dir+q.length)%q.length;
     playAt(q,n);};
   const seek=async e=>{const v=Math.max(0,Math.min(1,e.nativeEvent.locationX/seekW))*duration;setPosition(v);
-    if(soundRef.current)try{await soundRef.current.setPositionAsync(v);}catch(er){}};
+    if(soundRef.current)try{await soundRef.current.setPositionAsync(v);}catch(error){}};
 
   // ---------- biblioteca ----------
   const isSaved=t=>saved.some(x=>x.id===t.id);
@@ -166,6 +198,7 @@ export default function App() {
   };
   const submitAuth=async()=>{
     if(!fEmail.trim()||!fPass)return setAuthErr('Preencha e-mail e senha.');
+    if(mode==='register'&&!fName.trim())return setAuthErr('Informe seu nome.');
     setBusy(true);setAuthErr('');
     try{
       if(mode==='login')await fb.login(fEmail.trim(),fPass); else await fb.register(fName.trim(),fEmail.trim(),fPass);
@@ -187,7 +220,7 @@ export default function App() {
     <View style={styles.header}><View style={{flex:1}}><Text style={styles.small}>Olá{displayName?`, ${displayName}`:''}! 👋</Text><Text style={styles.h1}>Início</Text></View>
       <Ionicons name="notifications-outline" size={24} color={C.text}/></View>
     <TouchableOpacity activeOpacity={.8} onPress={()=>{setPage('search');setQuery('');}}><SearchBox><Text style={styles.placeholder}>Pesquisar músicas, artistas, álbuns...</Text></SearchBox></TouchableOpacity>
-    {homeError&&<><Text style={styles.message}>Não foi possível carregar a Deezer. Verifique sua conexão.</Text><Btn green style={{marginTop:12,alignSelf:'flex-start'}} onPress={()=>{setHomeError(false);setRetry(r=>r+1);}}><Text style={styles.greenText}>Tentar de novo</Text></Btn></>}
+    {homeError&&<><Text style={styles.message}>Não foi possível carregar as músicas gratuitas. Verifique sua conexão.</Text><Btn green style={{marginTop:12,alignSelf:'flex-start'}} onPress={()=>{setHomeError(false);setRetry(r=>r+1);}}><Text style={styles.greenText}>Tentar de novo</Text></Btn></>}
     {!homeData&&!homeError&&<ActivityIndicator color={C.green} style={{marginTop:28}}/>}
     {homeData&&<>
       <Section title="Destaques"><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontal}>
@@ -245,8 +278,9 @@ export default function App() {
     <View style={styles.brand}><Image source={require('./assets/logo.png')} style={styles.logoImg}/><Text style={styles.brandTitle}>spotifree</Text><Text style={styles.welcomeSub}>Ouça suas músicas favoritas{'\n'}sem pagar nada.</Text></View>
     <View style={{width:'100%',gap:12}}>
       <Btn green disabled={busy} onPress={startGuest}>{busy?<ActivityIndicator color="#04150b"/>:<><Ionicons name="play" size={18} color="#04150b"/><Text style={styles.greenText}>Começar agora</Text></>}</Btn>
-      <Btn onPress={()=>fb.fbReady?(setAuthErr(''),setAuthOpen(true)):startGuest()} style={styles.outlineButton}><Text style={styles.trackTitle}>Entrar</Text></Btn>
-      {!fb.fbReady&&<Text style={[styles.small,{textAlign:'center'}]}>Firebase não configurado: dados salvos só neste aparelho.</Text>}</View>
+      <Btn onPress={()=>{setMode('login');setAuthErr('');setAuthOpen(true);}} style={styles.outlineButton}><Text style={styles.trackTitle}>Entrar</Text></Btn>
+      <Btn onPress={()=>{setMode('register');setAuthErr('');setAuthOpen(true);}} style={styles.outlineButton}><Text style={styles.trackTitle}>Criar conta</Text></Btn>
+      {!fb.fbReady&&<Text style={[styles.small,{textAlign:'center'}]}>Para usar contas, configure o Firebase no arquivo .env.</Text>}</View>
   </View>;
 
   const progressPct=`${Math.min(100,position/(duration||30000)*100)}%`;
@@ -291,6 +325,12 @@ export default function App() {
           <Btn green style={styles.bigPlay} onPress={toggle}><Ionicons name={playing?'pause':'play'} size={30} color="#04150b"/></Btn>
           <Btn style={styles.iconButton} onPress={()=>step(1)}><Ionicons name="play-skip-forward" size={27} color={C.text}/></Btn>
           <Btn style={styles.iconButton} onPress={()=>setRepeat(r=>r==='off'?'all':r==='all'?'one':'off')}><Ionicons name={repeat==='one'?'repeat':'repeat'} size={24} color={repeat==='off'?C.text:C.green}/>{repeat==='one'&&<Text style={{color:C.green,fontSize:10,fontWeight:'800'}}>1</Text>}</Btn>
+          <Btn style={styles.iconButton} onPress={()=>setDialog({title:sleepMinutes?'Timer ativo':'Timer de desligamento',msg:sleepMinutes?`A reprodução será pausada em ${sleepMinutes} minuto(s).`:'Escolha quanto tempo deve tocar.',actions:[
+            {text:'Desligar',danger:sleepMinutes>0,onPress:sleepMinutes?()=>setSleepMinutes(0):undefined},
+            {text:'15 min',onPress:()=>setSleepMinutes(15)},
+            {text:'30 min',onPress:()=>setSleepMinutes(30)},
+            {text:'60 min',onPress:()=>setSleepMinutes(60)},
+          ]})}><Ionicons name="moon-outline" size={23} color={sleepMinutes?C.green:C.text}/></Btn>
         </View>
         <Text style={[styles.small,{textAlign:'center',marginTop:'auto',paddingBottom:20}]}>Prévia de 30 segundos fornecida pela Deezer.</Text>
       </SafeAreaView>

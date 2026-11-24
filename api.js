@@ -2,68 +2,89 @@ import {Platform} from 'react-native';
 
 const BASE = 'https://api.deezer.com';
 const cache = {};
-
-// A Deezer não libera CORS, então no navegador (Expo Web / Snack) o fetch direto falha.
-// Estratégia: JSONP (web) -> fetch direto (nativo) -> proxies CORS como reserva.
 const PROXIES = [
-  u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-  u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-  u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  url => `https://api.codetabs.com/v1/proxy?url=${encodeURIComponent(url)}`,
 ];
 
-function jsonp(url, ms = 8000) {
+function jsonp(url, timeout = 8000) {
   return new Promise((resolve, reject) => {
-    const cb = 'dz' + Date.now() + Math.floor(Math.random() * 1e5);
-    const s = document.createElement('script');
-    const clean = () => { clearTimeout(t); delete window[cb]; s.remove(); };
-    const t = setTimeout(() => { clean(); reject(new Error('timeout')); }, ms);
-    window[cb] = d => { clean(); resolve(d); };
-    s.onerror = () => { clean(); reject(new Error('jsonp')); };
-    s.src = `${url}${url.includes('?') ? '&' : '?'}output=jsonp&callback=${cb}`;
-    document.body.appendChild(s);
+    const callback = `dz${Date.now()}${Math.floor(Math.random() * 1e5)}`;
+    const script = document.createElement('script');
+    const cleanup = () => {
+      clearTimeout(timer);
+      delete window[callback];
+      script.remove();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('A Deezer demorou para responder.'));
+    }, timeout);
+    window[callback] = data => {
+      cleanup();
+      resolve(data);
+    };
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('Não foi possível acessar a Deezer.'));
+    };
+    script.src = `${url}${url.includes('?') ? '&' : '?'}output=jsonp&callback=${callback}`;
+    document.body.appendChild(script);
   });
 }
 
-async function fetchJson(url, ms = 9000) {
-  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const t = setTimeout(() => ctrl && ctrl.abort(), ms);
+async function fetchJson(url, timeout = 9000) {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = setTimeout(() => controller?.abort(), timeout);
   try {
-    const r = await fetch(url, ctrl ? {signal: ctrl.signal} : undefined);
-    if (!r.ok) throw new Error('http ' + r.status);
-    return await r.json();
-  } finally { clearTimeout(t); }
+    const response = await fetch(url, controller ? {signal: controller.signal} : undefined);
+    if (!response.ok) throw new Error(`Deezer respondeu com HTTP ${response.status}.`);
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function get(path) {
   if (cache[path]) return cache[path];
   const url = BASE + path;
-  const isWeb = Platform.OS === 'web';
   const attempts = [
-    isWeb ? () => jsonp(url) : () => fetchJson(url),
-    ...PROXIES.map(p => () => fetchJson(p(url))),
+    ...(Platform.OS === 'web' ? [() => jsonp(url)] : [() => fetchJson(url)]),
+    ...PROXIES.map(proxy => () => fetchJson(proxy(url))),
   ];
-  let lastErr;
-  for (const run of attempts) {
+  let lastError;
+  for (const attempt of attempts) {
     try {
-      const data = await run();
-      if (data && !data.error) { cache[path] = data; return data; }
-      lastErr = new Error(data?.error?.message || 'Erro da Deezer');
-    } catch (e) { lastErr = e; }
+      const data = await attempt();
+      if (data && !data.error) {
+        cache[path] = data;
+        return data;
+      }
+      lastError = new Error(data?.error?.message || 'Erro ao consultar a Deezer.');
+    } catch (error) {
+      lastError = error;
+    }
   }
-  throw lastErr || new Error('Falha ao acessar a Deezer');
+  throw lastError || new Error('Falha ao acessar a Deezer.');
 }
 
-export const chartTracks = () => get('/chart/0/tracks?limit=20').then(x => x.data);
-export const chartArtists = () => get('/chart/0/artists?limit=12').then(x => x.data);
-export const chartAlbums = () => get('/chart/0/albums?limit=12').then(x => x.data);
-export const search = q => get(`/search?q=${encodeURIComponent(q)}&limit=30`).then(x => x.data);
-export const artistTop = id => get(`/artist/${id}/top?limit=25`).then(x => x.data);
-export const albumTracks = id => get(`/album/${id}`).then(a =>
-  a.tracks.data.map(t => ({...t, album: a, artist: t.artist || a.artist})));
+export const chartTracks = () => get('/chart/0/tracks?limit=20').then(result => result.data);
+export const chartArtists = () => get('/chart/0/artists?limit=12').then(result => result.data);
+export const chartAlbums = () => get('/chart/0/albums?limit=12').then(result => result.data);
+export const search = query => get(`/search?q=${encodeURIComponent(query)}&limit=30`).then(result => result.data);
+export const artistTop = id => get(`/artist/${id}/top?limit=25`).then(result => result.data);
+export const albumTracks = id => get(`/album/${id}`).then(album =>
+  album.tracks.data.map(track => ({...track, album, artist: track.artist || album.artist})));
 
-export const norm = t => ({
-  id: t.id, title: t.title, artist: t.artist?.name || '', artistId: t.artist?.id,
-  cover: t.album?.cover_medium || t.album?.cover_big || '',
-  coverBig: t.album?.cover_xl || t.album?.cover_big || t.album?.cover_medium || '',
-  preview: t.preview, duration: t.duration || 30,
+export const norm = track => ({
+  id: track.id,
+  title: track.title,
+  artist: track.artist?.name || '',
+  artistId: track.artist?.id,
+  cover: track.album?.cover_medium || track.album?.cover_big || '',
+  coverBig: track.album?.cover_xl || track.album?.cover_big || track.album?.cover_medium || '',
+  preview: track.preview,
+  duration: track.duration || 30,
+  source: 'Deezer',
 });
