@@ -27,6 +27,8 @@ O modo visitante continua disponível na tela inicial e mantém dados neste disp
 
 Com Firebase configurado, o app oferece login por e-mail/senha, Google na versão web e telefone. Para SMS, habilite as regiões de envio permitidas no Firebase Authentication. Google no app nativo requer IDs OAuth específicos para Android/iOS; telefone no app nativo requer configuração nativa de verificação.
 
+O proxy local atende somente às rotas da Deezer utilizadas pelo aplicativo. Para publicar a versão web, hospede `server.js` em um serviço Node e defina `EXPO_PUBLIC_DEEZER_PROXY_URL` apontando para a rota `/api/deezer`; o proxy local não é um backend público.
+
 ## Recursos
 
 - Início com destaques de músicas, artistas e álbuns.
